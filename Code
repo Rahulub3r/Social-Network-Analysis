@@ -1,0 +1,97 @@
+library(dplyr)
+library(tidyr)
+library(shiny)
+library(ggplot2)
+library(networkD3)
+library(scales)
+ui <- pageWithSidebar(
+        titlePanel("Cocaine Dealing Social Network Analysis"),
+        sidebarPanel(
+                conditionalPanel(condition = "input.tabselected == 1",
+                        radioButtons("table", "Choose a table:", c("Normal Table" = "NT", "Tall Table" = "TT"))
+                ),
+                conditionalPanel(condition = "input.tabselected == 2",
+                        radioButtons("text", "Which Information:",
+                                        c("Total Calls Placed" = "TC", "People who got received most calls" = "MD",
+                                        "People who called the most"="MR"))),
+                conditionalPanel(condition = "input.tabselected == 3",
+                                 radioButtons("color", "Select color scale: ",
+                                              c("Red/Blue" = "R", "Green/Yellow" = "G"))
+                                 ),
+                conditionalPanel(condition = "input.tabselected == 4",
+                         radioButtons("plots", "Choose a network:",
+                                      c("Connection Network" = "CN", "Outbound Calls Network" = "ON",
+                                        "Inbound Calls Network" = "IN")))
+        ),
+        mainPanel(
+                tabsetPanel(type = "tab",
+                            tabPanel("Table", dataTableOutput(outputId = "table"), value = 1),
+                            tabPanel("Text",textOutput(outputId = "text"), value = 2),
+                            tabPanel("Map", plotOutput(outputId = "map"), value = 3),
+                            tabPanel("Network",forceNetworkOutput(outputId = "net"), value = 4,
+                                     sliderInput("radius", "Select a node radius: ",min = 5, max = 25, value = 10)),
+                            id = "tabselected"
+                )
+        )
+)
+                
+server <- function(input,output){
+        deal <- read.csv('COCAINE_DEALING.csv')
+        colnames(deal)[1] <- "caller"
+        new_deal <- gather(deal,called,count,-caller) %>% arrange(desc(count))
+        calls_received <- new_deal %>% group_by(called) %>% summarise(calls = sum(count)) %>% arrange(calls)
+        max_received_guys <- as.character(as.list(calls_received[which(calls_received[,2] == max(calls_received$calls)),][,1])[[1]])
+        calls_dialled <- new_deal %>% group_by(caller) %>% summarise(calls = sum(count)) %>% arrange(calls)
+        max_caller_guys <- as.character(as.list(calls_dialled[which(calls_dialled[,2]==max(calls_dialled$calls)),][,1])[[1]])
+        total_calls <- sum(new_deal$count, na.rm = TRUE)
+        l <- new_deal
+        name <- levels(as.factor(l$caller))
+        group <- seq(0,length(name)-1)
+        rad <- reactive({
+                size <- rep(input$radius, length(group))
+        })
+        l$caller <- factor(l$caller, labels = group, levels = name)
+        l$called <- factor(l$called, labels = group, levels = name)
+        callers <- l %>% group_by(caller) %>% summarise(size = sum(count)) %>% select(size) %>% unlist %>% unname
+        receivers <- l%>% group_by(called) %>% summarise(size = sum(count)) %>% select(size) %>% unlist %>% unname
+        
+        output$map <- renderPlot({
+                g1 <- ggplot(new_deal, aes(x = called, y = caller, fill = count))+
+                        geom_tile() + scale_fill_gradientn(colours = c("blue","white","darkred"), 
+                                                           values = rescale(c(0,10,20)),
+                                                           guide = "colorbar", limits=c(0,20))
+                g2 <- ggplot(new_deal, aes(x = called, y = caller, fill = count))+
+                        geom_tile() + scale_fill_gradientn(colours = c("darkgreen","white","yellow"), 
+                                                           values = rescale(c(0,10,20)),
+                                                           guide = "colorbar", limits=c(0,20))
+                switch(input$color, R = plot(g1), G = plot(g2))
+        })
+        output$table <- renderDataTable({
+                switch(input$table, NT = deal, TT = new_deal)
+        })
+        output$text <- renderPrint({
+                switch(input$text, TC = cat(total_calls),
+                        MD = cat(max_received_guys) , MR =cat(max_caller_guys))
+        })
+        output$net <- renderForceNetwork(
+                        switch(input$plots,
+                               CN = forceNetwork(l,data.frame(name, group, size = rad()*4),Source = "caller",
+                                                 Target = "called", Value = "count",
+                                                 NodeID = "name", Group = "group",fontSize =25, opacity = 1,
+                                                 linkDistance = JS("function(d) { return 15*d.value + 150; }"),
+                                                 Nodesize = "size", opacityNoHover = 1, zoom = TRUE),
+                               ON = forceNetwork(l,data.frame(name, group, size = rad() * callers),Source = "caller",
+                                                 Target = "called", Value = "count",
+                                                 NodeID = "name", Group = "group",fontSize =25, opacity = 1,
+                                                 linkDistance = JS("function(d) { return 15*d.value + 150; }"),
+                                                 Nodesize = "size", opacityNoHover = 1, zoom = TRUE),
+                               IN = forceNetwork(l,data.frame(name, group, size = rad() * receivers),Source = "caller",
+                                                 Target = "called", Value = "count",
+                                                 NodeID = "name", Group = "group",fontSize =25, opacity = 1,
+                                                 linkDistance = JS("function(d) { return 15*d.value + 150; }"),
+                                                 Nodesize = "size", opacityNoHover = 1, zoom = TRUE)
+                        )
+        )
+}
+
+shinyApp(ui = ui, server = server)
